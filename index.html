@@ -318,6 +318,27 @@ async function readFile(file){
     r.readAsDataURL(file);
   });
 }
+// Re-draw via canvas: applies EXIF orientation (fixes upside-down/rotated phone photos)
+// and shrinks to a sensible size for faster, cheaper, more reliable reading.
+function downscaleImage(dataUrl, maxEdge){
+  return new Promise((resolve)=>{
+    const img=new Image();
+    img.onload=()=>{
+      try{
+        const scale=Math.min(1, maxEdge/Math.max(img.width,img.height));
+        const cw=Math.max(1,Math.round(img.width*scale)), ch=Math.max(1,Math.round(img.height*scale));
+        const canvas=document.createElement('canvas');
+        canvas.width=cw; canvas.height=ch;
+        const ctx=canvas.getContext('2d');
+        ctx.fillStyle='#fff'; ctx.fillRect(0,0,cw,ch);
+        ctx.drawImage(img,0,0,cw,ch);
+        resolve(canvas.toDataURL('image/jpeg',0.85));
+      }catch(e){ resolve(dataUrl); }
+    };
+    img.onerror=()=>resolve(dataUrl);
+    img.src=dataUrl;
+  });
+}
 async function extractReceipt(dataUrl){
   const mode = (cfg.ocr && cfg.ocr.mode) || 'tesseract';
   if(mode==='claude' && cfg.ocr && cfg.ocr.key){
@@ -449,7 +470,7 @@ document.getElementById('fileIn').addEventListener('change', async (ev)=>{
   if(!files.length) return;
   errMsg='';
   const urls=[];
-  for(const f of files){ try{ urls.push(await readFile(f)); }catch(e){} }
+  for(const f of files){ try{ const raw=await readFile(f); urls.push(await downscaleImage(raw, 1600)); }catch(e){} }
   if(!urls.length){ errMsg='Could not open the images.'; tab='scan'; render(); return; }
   queue=urls; queueTotal=urls.length; queueIdx=0;
   processNext();
