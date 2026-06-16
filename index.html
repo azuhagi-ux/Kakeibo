@@ -217,7 +217,7 @@ const I18N = {
     pickImages:'Load receipt images',helperHint:'Load the receipt photos your helper sent you. Several at once is fine.',skip:'Skip',
     choosePhoto:'Choose a photo',reading:'Reading the receipt…',
     review:'Check the items',merchant:'Shop',date:'Date',item:'Item',price:'Price',category:'Category',
-    addItem:'Add item',total:'Total',save:'Save receipt',cancel:'Cancel',retry:'Try another photo',
+    addItem:'Add item',total:'Total',save:'Save receipt',cancel:'Cancel',retry:'Try another photo',edit:'Edit',
     budget:'Monthly budget',currency:'Currency',language:'Language',categories:'Categories',
     addCat:'Add category',saveSettings:'Save settings',saved:'Saved',
     allReceipts:'All receipts',delete:'Delete',confirmDel:'Delete this receipt?',
@@ -248,7 +248,7 @@ const I18N = {
     pickImages:'画像を読み込む',helperHint:'ヘルパーさんから届いたレシート写真を読み込みます。複数枚まとめてOK。',skip:'スキップ',
     choosePhoto:'写真を選ぶ',reading:'レシートを読み取っています…',
     review:'明細を確認',merchant:'店名',date:'日付',item:'品目',price:'金額',category:'カテゴリ',
-    addItem:'品目を追加',total:'合計',save:'レシートを保存',cancel:'キャンセル',retry:'撮り直す',
+    addItem:'品目を追加',total:'合計',save:'レシートを保存',cancel:'キャンセル',retry:'撮り直す',edit:'編集',
     budget:'月の予算',currency:'通貨',language:'言語',categories:'カテゴリ',
     addCat:'カテゴリを追加',saveSettings:'設定を保存',saved:'保存しました',
     allReceipts:'すべてのレシート',delete:'削除',confirmDel:'このレシートを削除しますか？',
@@ -623,7 +623,10 @@ function vHome(){
 }
 
 function cashCardHTML(c, withDel){
-  const del = withDel? `<button class="btn alt sm" data-action="delCash" data-id="${c.id}" style="margin-top:8px;color:var(--over)">${t('delete')}</button>`:'';
+  const del = withDel? `<div class="btnrow" style="margin-top:8px">
+      <button class="btn alt sm" data-action="editCash" data-id="${c.id}">${t('edit')}</button>
+      <button class="btn alt sm" data-action="delCash" data-id="${c.id}" style="color:var(--over)">${t('delete')}</button>
+    </div>`:'';
   return `<div class="tape cashin">
     <div class="rh"><span class="mch">💵 ${t('gaveLabel')}</span><span class="dt">${c.date}</span></div>
     <div class="leader"><span class="nm">${c.note?esc(c.note):'<span style="color:var(--ink-faint)">—</span>'}</span>
@@ -641,7 +644,10 @@ function tapeHTML(r, full){
       <span class="l"></span><span class="p">${fmt(it.price)}</span></div>`;
   });
   const more = (!full && r.items.length>3)? `<div class="note" style="margin:2px 0 0">+${r.items.length-3} ${t('items')}</div>`:'';
-  const delBtn = full? `<button class="btn alt sm" data-action="delRcpt" data-id="${r.id}" style="margin-top:10px;color:var(--over)">${t('delete')}</button>`:'';
+  const delBtn = full? `<div class="btnrow" style="margin-top:10px">
+      <button class="btn alt sm" data-action="editRcpt" data-id="${r.id}">${t('edit')}</button>
+      <button class="btn alt sm" data-action="delRcpt" data-id="${r.id}" style="color:var(--over)">${t('delete')}</button>
+    </div>`:'';
   return `<div class="tape">
     <div class="rh"><span class="mch">${esc(r.merchant||'—')}</span><span class="dt">${r.date}</span></div>
     ${li}${more}
@@ -725,9 +731,10 @@ function vHistory(){
 
 function cashModalHTML(){
   if(!showCash || !cashDraft) return '';
+  const editing = !!cashDraft.editId;
   return `<div class="modal-bg" data-action="cashbg">
     <div class="modal" data-action="noop">
-      <div class="eyebrow">${t('giveMoney')}</div>
+      <div class="eyebrow">${editing?t('edit'):t('giveMoney')}</div>
       <label class="fld"><span class="lab">${t('date')}</span>
         <input type="date" data-cashfield="date" value="${cashDraft.date}"></label>
       <label class="fld"><span class="lab">${t('amount')} (${sym().trim()})</span>
@@ -736,7 +743,7 @@ function cashModalHTML(){
         <input data-cashfield="note" value="${esc(cashDraft.note)}" placeholder="${t('noteEg')}"></label>
       <div class="btnrow" style="margin-top:18px">
         <button class="btn alt" data-action="cancelCash">${t('cancel')}</button>
-        <button class="btn" data-action="saveCash">${t('giveMoney')}</button>
+        <button class="btn" data-action="saveCash">${editing?t('edit'):t('giveMoney')}</button>
       </div>
     </div>
   </div>`;
@@ -914,15 +921,25 @@ document.addEventListener('click', async (e)=>{
   if(a==='manual'){ draft=blankDraft(); errMsg=''; pendingPreview=''; render(); return; }
   if(a==='addItem'){ draft.items.push({name:'',price:0,cat:cfg.categories[0].id}); render(); return; }
   if(a==='delItem'){ draft.items.splice(Number(el.dataset.i),1); if(!draft.items.length) draft.items.push({name:'',price:0,cat:cfg.categories[0].id}); render(); return; }
-  if(a==='cancelDraft'){ draft=null; pendingPreview=''; errMsg=''; if(queue.length){ processNext(); } else { queueTotal=0; tab='home'; render(); } return; }
+  if(a==='cancelDraft'){ const wasEdit=draft&&draft.editId; draft=null; pendingPreview=''; errMsg=''; if(!wasEdit && queue.length){ processNext(); } else { queueTotal=0; tab= wasEdit?'history':'home'; render(); } return; }
+  if(a==='editRcpt'){
+    const r=receipts.find(x=>x.id===el.dataset.id);
+    if(r){ draft={id:r.id, editId:r.id, merchant:r.merchant, date:r.date,
+      items:r.items.map(it=>({name:it.name,price:it.price,cat:it.cat})), total:r.total};
+      pendingPreview=''; errMsg=''; queue=[]; queueTotal=0; tab='scan'; render(); }
+    return;
+  }
   if(a==='saveDraft'){
     draft.total=draftTotal();
     draft.items=draft.items.filter(i=>i.name||i.price);
     if(!draft.items.length){ return; }
-    receipts.push({id:draft.id,merchant:draft.merchant,date:draft.date,items:draft.items,total:draft.total});
+    const rec={id:draft.id,merchant:draft.merchant,date:draft.date,items:draft.items,total:draft.total};
+    const wasEdit=!!draft.editId;
+    if(wasEdit){ const idx=receipts.findIndex(x=>x.id===draft.editId); if(idx>=0) receipts[idx]=rec; else receipts.push(rec); }
+    else receipts.push(rec);
     await persistReceipts();
-    draft=null; pendingPreview=''; selMonth=(receipts[receipts.length-1].date||todayISO()).slice(0,7);
-    if(queue.length){ processNext(); } else { queueTotal=0; tab='home'; render(); }
+    draft=null; pendingPreview=''; selMonth=(rec.date||todayISO()).slice(0,7);
+    if(!wasEdit && queue.length){ processNext(); } else { queueTotal=0; tab= wasEdit?'history':'home'; render(); }
     return;
   }
   if(a==='delRcpt'){
@@ -930,15 +947,25 @@ document.addEventListener('click', async (e)=>{
     return;
   }
   if(a==='giveMoney'){ cashDraft={date:todayISO(),amount:'',note:''}; showCash=true; render(); return; }
+  if(a==='editCash'){
+    const c=cash.find(x=>x.id===el.dataset.id);
+    if(c){ cashDraft={editId:c.id, date:c.date, amount:c.amount, note:c.note||''}; showCash=true; render(); }
+    return;
+  }
   if(a==='noop'){ return; }
   if(a==='cashbg'||a==='cancelCash'){ showCash=false; cashDraft=null; render(); return; }
   if(a==='saveCash'){
     const amt=Number(cashDraft.amount);
     if(!amt||amt<=0){ alert(t('needAmount')); return; }
-    cash.push({id:'c'+Date.now(),date:cashDraft.date||todayISO(),amount:amt,note:(cashDraft.note||'').slice(0,60)});
+    const entry={id:cashDraft.editId||('c'+Date.now()), date:cashDraft.date||todayISO(), amount:amt, note:(cashDraft.note||'').slice(0,60)};
+    const wasEdit=!!cashDraft.editId;
+    if(wasEdit){ const idx=cash.findIndex(x=>x.id===cashDraft.editId); if(idx>=0) cash[idx]=entry; else cash.push(entry); }
+    else cash.push(entry);
     await persistCash();
-    selMonth=(cash[cash.length-1].date||todayISO()).slice(0,7);
-    showCash=false; cashDraft=null; render(); return;
+    selMonth=(entry.date||todayISO()).slice(0,7);
+    showCash=false; cashDraft=null;
+    if(wasEdit) tab='history';
+    render(); return;
   }
   if(a==='delCash'){
     if(confirm(t('confirmDel'))){ cash=cash.filter(c=>c.id!==el.dataset.id); await persistCash(); render(); }
