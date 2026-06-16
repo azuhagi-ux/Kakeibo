@@ -237,7 +237,10 @@ const I18N = {
     ocrSection:'Receipt reading',ocrMode:'Method',ocrFree:'Free / offline (on-device)',
     ocrClaude:'High accuracy (your Claude API key)',apiKey:'Claude API key',
     apiKeyNote:'Stored only on this device. Used to read receipts via Claude. Get a key at console.anthropic.com.',
-    ocrFreeNote:'First read downloads the engine (needs internet once). Accuracy is moderate; check items before saving.'},
+    ocrFreeNote:'First read downloads the engine (needs internet once). Accuracy is moderate; check items before saving.',
+    importMerge:'Add from text',importPaste:'Paste the data here',importDo:'Add',
+    imported:'Added',importFail:'Could not read this text.',importNote:'Paste the block Claude gave you in chat. It is added to your existing records.',
+    claudeFail:'Reading failed. Check your API key and that your account has credit.'},
   ja:{brand:'家計レシート',home:'ホーム',scan:'スキャン',history:'履歴',settings:'設定',
     thisMonth:'今月',spentOf:'/',remaining:'残り',over:'予算超過',daysLeft:'日',
     breakdown:'何に使ったか',recent:'最近のレシート',noReceipts:'レシートがありません',
@@ -265,7 +268,10 @@ const I18N = {
     ocrSection:'レシート読み取り',ocrMode:'方式',ocrFree:'無料・オフライン（端末内）',
     ocrClaude:'高精度（自分のClaude APIキー）',apiKey:'Claude APIキー',
     apiKeyNote:'この端末内だけに保存され、レシート読み取りに使われます。キーは console.anthropic.com で取得できます。',
-    ocrFreeNote:'初回はエンジンを取得します（一度だけ通信が必要）。精度は中程度なので、保存前に明細を確認してください。'},
+    ocrFreeNote:'初回はエンジンを取得します（一度だけ通信が必要）。精度は中程度なので、保存前に明細を確認してください。',
+    importMerge:'貼り付けて取り込み',importPaste:'ここにデータを貼り付け',importDo:'取り込む',
+    imported:'取り込みました',importFail:'このテキストを読み取れませんでした。',importNote:'チャットでClaudeが渡したブロックを貼り付けてください。既存の記録に追加されます。',
+    claudeFail:'読み取りに失敗しました。APIキーと、残高（クレジット）があるか確認してください。'},
 };
 
 /* ============ state ============ */
@@ -279,6 +285,7 @@ let busy = false, errMsg = '';
 let queue=[], queueTotal=0, queueIdx=0;   // batch processing of multiple images
 let showCash=false, cashDraft=null;       // give-cash modal
 let showData=false, dataView=null;        // export/backup modal
+let showImport=false;                      // paste-to-merge modal
 
 function t(k){ return (I18N[cfg?cfg.lang:'en'][k]) || k; }
 function ym(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
@@ -377,7 +384,10 @@ async function extractWithClaude(dataUrl, key){
     },
     body:JSON.stringify(body)
   });
-  if(!resp.ok) throw new Error('api '+resp.status);
+  if(!resp.ok){
+    let detail=''; try{ const ej=await resp.json(); detail=(ej && ej.error && ej.error.message)? ej.error.message : ''; }catch(_){}
+    throw new Error('API '+resp.status+(detail? (': '+detail):''));
+  }
   const data = await resp.json();
   const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
   let clean = text.replace(/```json/gi,'').replace(/```/g,'').trim();
@@ -486,7 +496,9 @@ async function processNext(){
   try{ res=await extractReceipt(dataUrl); }
   catch(e){
     busy=false;
-    errMsg = hasStore ? t('readFail') : t('noKey');
+    if(!hasStore){ errMsg = t('noKey'); }
+    else if(cfg.ocr && cfg.ocr.mode==='claude'){ errMsg = t('claudeFail') + (e && e.message ? (' ['+e.message+']') : ''); }
+    else { errMsg = t('readFail'); }
     draft = {id:'r'+Date.now()+'_'+queueIdx,merchant:'',date:todayISO(),
       items:[{name:'',price:0,cat:cfg.categories[0].id}],total:0};
     render();
@@ -650,6 +662,7 @@ function vScan(){
     <p style="color:var(--ink-soft);margin:8px 0 16px">${t('helperHint')}</p>
     ${errMsg?`<div class="err">${errMsg}</div>`:''}
     <button class="btn" data-action="pick">🖼 ${t('pickImages')}</button>
+    <button class="btn alt sm" data-action="openImport" style="margin-top:10px">📋 ${t('importMerge')}</button>
     <button class="btn alt sm" data-action="manual" style="margin-top:10px">＋ ${t('addItem')}</button>
   </div>`;
 }
@@ -767,6 +780,50 @@ function dataModalHTML(){
   </div>`;
 }
 
+function importModalHTML(){
+  if(!showImport) return '';
+  return `<div class="modal-bg" data-action="importbg">
+    <div class="modal datacard" data-action="noop">
+      <div class="eyebrow">${t('importMerge')}</div>
+      <p class="note" style="margin:6px 0 8px">${t('importNote')}</p>
+      <textarea id="importText" class="ta" placeholder="${t('importPaste')}"></textarea>
+      <div class="btnrow" style="margin-top:12px">
+        <button class="btn alt" data-action="closeImport">${t('cancel')}</button>
+        <button class="btn" data-action="doImport">${t('importDo')}</button>
+      </div>
+    </div>
+  </div>`;
+}
+// merge pasted JSON into existing data (adds, never overwrites)
+function mergeImport(text){
+  const data = JSON.parse(text);
+  let recs=[], cashArr=[];
+  if(Array.isArray(data)) recs=data;
+  else if(data && (data.receipts || data.cash)){ recs=data.receipts||[]; cashArr=data.cash||[]; }
+  else if(data && data.items) recs=[data];
+  else throw new Error('shape');
+  const valid=new Set(cfg.categories.map(c=>c.id));
+  const stamp=Date.now();
+  recs.forEach((r,idx)=>{
+    const items=(r.items||[]).map(it=>({name:String(it.name||'').slice(0,60), price:Number(it.price)||0, cat: valid.has(it.cat)? it.cat : 'other'}));
+    receipts.push({
+      id:'r'+stamp+'_'+idx,
+      date: /^\d{4}-\d{2}-\d{2}$/.test(r.date||'')? r.date : todayISO(),
+      merchant:String(r.merchant||''),
+      items: items.length? items : [{name:'',price:0,cat:'other'}],
+      total: Number(r.total)|| items.reduce((s,it)=>s+it.price,0)
+    });
+  });
+  cashArr.forEach((c,idx)=>{
+    cash.push({
+      id:'c'+stamp+'_'+idx,
+      date: /^\d{4}-\d{2}-\d{2}$/.test(c.date||'')? c.date : todayISO(),
+      amount:Number(c.amount)||0, note:String(c.note||'').slice(0,60)
+    });
+  });
+  return recs.length + cashArr.length;
+}
+
 function vSettings(){
   const curOpts=Object.keys(CURRENCIES).map(c=>`<option value="${c}">${c} (${CURRENCIES[c]})</option>`).join('');
   let cats='';
@@ -840,7 +897,7 @@ function render(){
   const v=document.getElementById('view');
   v.innerHTML = tab==='home'?vHome(): tab==='scan'?vScan(): tab==='history'?vHistory(): vSettings();
   document.getElementById('nav').innerHTML=navHTML();
-  document.getElementById('modalRoot').innerHTML=cashModalHTML()+dataModalHTML();
+  document.getElementById('modalRoot').innerHTML=cashModalHTML()+dataModalHTML()+importModalHTML();
   if(showData){ const ta=document.getElementById('dataText'); if(ta){ ta.focus(); ta.select(); } }
 }
 
@@ -902,6 +959,21 @@ document.addEventListener('click', async (e)=>{
     showData=true; render(); return;
   }
   if(a==='importJson'){ document.getElementById('restoreIn').click(); return; }
+  if(a==='openImport'){ showImport=true; render(); return; }
+  if(a==='importbg'||a==='closeImport'){ showImport=false; render(); return; }
+  if(a==='doImport'){
+    const ta=document.getElementById('importText');
+    const txt=ta? ta.value.trim():'';
+    if(!txt){ showImport=false; render(); return; }
+    try{
+      const n=mergeImport(txt);
+      await persistReceipts(); await persistCash();
+      if(receipts.length) selMonth=(receipts[receipts.length-1].date||todayISO()).slice(0,7);
+      showImport=false; tab='home'; render();
+      setTimeout(()=>alert(t('imported')+(n?(' ('+n+')'):'')),50);
+    }catch(e){ alert(t('importFail')); }
+    return;
+  }
   if(a==='databg'||a==='closeData'){ showData=false; dataView=null; render(); return; }
   if(a==='copyData'){
     const txt=dataView?dataView.text:'';
