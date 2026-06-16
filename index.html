@@ -1052,8 +1052,8 @@ document.addEventListener('click', async (e)=>{
   }
 });
 
-document.addEventListener('input', (e)=>{
-  const el=e.target;
+function onFieldChange(el){
+  if(!el || !el.dataset) return;
   if(el.dataset.ocr){
     if(el.dataset.ocr==='mode'){ cfg.ocr.mode=el.value; render(); }
     else if(el.dataset.ocr==='key'){ cfg.ocr.key=el.value; }
@@ -1069,14 +1069,21 @@ document.addEventListener('input', (e)=>{
     else if(f==='price'){ draft.items[i].price=el.value; updateDraftTotal(); }
     else if(f==='cat') draft.items[i].cat=el.value;
   }
-});
+}
+// Listen to both: text inputs fire 'input', but date pickers / selects on mobile (esp. iOS) fire only 'change'.
+document.addEventListener('input', (e)=>onFieldChange(e.target));
+document.addEventListener('change', (e)=>onFieldChange(e.target));
 function updateDraftTotal(){
   const tot=document.querySelector('#view .tape .tot .p');
   if(tot) tot.textContent=fmt(draftTotal());
 }
 
 if('serviceWorker' in navigator){
-  window.addEventListener('load', ()=>{ navigator.serviceWorker.register('service-worker.js').catch(()=>{}); });
+  let refreshing=false;
+  navigator.serviceWorker.addEventListener('controllerchange', ()=>{ if(refreshing) return; refreshing=true; location.reload(); });
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('service-worker.js').then((reg)=>{ try{ reg.update(); }catch(e){} }).catch(()=>{});
+  });
 }
 boot();
 </script>

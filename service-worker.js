@@ -1,6 +1,8 @@
-/* Household Ledger - offline app shell.
-   Caches local files only. Tesseract CDN and the Claude API always go to network. */
-const CACHE = 'kakeibo-v1';
+/* Household Ledger - service worker.
+   Network-first for the app page so updates appear as soon as they are deployed (online),
+   with cache fallback for offline. Static assets are cache-first.
+   Cross-origin requests (Google Fonts, Tesseract CDN, Claude API) always go to the network. */
+const CACHE = 'kakeibo-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -23,15 +25,27 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  const url = new URL(e.request.url);
-  // Only handle same-origin GET requests from the cache; everything else (fonts, Tesseract, API) hits the network.
-  if (e.request.method === 'GET' && url.origin === self.location.origin) {
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return; // fonts / Tesseract / API -> network
+
+  const isPage = req.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('.html');
+  if (isPage) {
+    // Network-first: always try to fetch the latest page, fall back to cache offline.
     e.respondWith(
-      caches.match(e.request).then((cached) => cached || fetch(e.request).then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
-        return res;
-      }).catch(() => cached))
+      fetch(req)
+        .then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {}); return res; })
+        .catch(() => caches.match(req).then((r) => r || caches.match('./index.html')))
     );
+    return;
   }
+  // Cache-first for static assets.
+  e.respondWith(
+    caches.match(req).then((cached) => cached || fetch(req).then((res) => {
+      const copy = res.clone();
+      caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+      return res;
+    }))
+  );
 });
